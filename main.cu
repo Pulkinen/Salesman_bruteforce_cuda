@@ -2,13 +2,6 @@
 #include <cuda_runtime.h>
 #include <iostream>
 
-// CUDA Kernel для сложения двух массивов
-__global__ void vectorAdd(int *a, int *b, int *c, int n) {
-    int index = threadIdx.x + blockIdx.x * blockDim.x;
-    if (index < n) {
-        c[index] = a[index] + b[index];
-    }
-}
 
 // Оценим время выполнения задачи для разного числа городов N
 // Умножение Xt * Q * X будет стоить N**4 флопов, т.к. матрица Q имеет размер N**2 х N**2
@@ -63,7 +56,7 @@ Xb
  \[ X^T Q X = C1 + C2 Xb + Xb^T Q{bb} Xb \]
 */
 
-__device__ void evaluate_distances(
+void evaluate_distances(
         int N,                  // число городов
         float* city_XYs,        // массив пар (X, Y) координат городов
         float* distances,       // NxN матрица дистанций между городами, является результатом работы функции
@@ -87,7 +80,7 @@ __device__ void evaluate_distances(
     }
 };
 
-__device__ void evaluate_QUBO_matrix(
+void evaluate_QUBO_matrix(
         int N,                   // число городов
         float* distances,        // NxN матрица дистанций между городами
         float* Q,                // N**2 x N**2 матрица QUBO, является результатом работы функции
@@ -121,12 +114,6 @@ __global__ void bruteforce_semifixed_X(
     float distances[7*7];
     float Q[49 * 49]; // Матрица QUBO. N**2 x N**2
     float max_dist = 0;
-    // Вычисление матрицы дистанции и далее матрицы QUBO параллелить не будем
-    // Посчитаем в 1 поток. Это O(N**3) операций, можно пренебречь
-    if (threadIdx.x == 0) {
-        evaluate_distances(N, city_XYs, distances, max_dist);
-        evaluate_QUBO_matrix(N, distances, Q, max_dist);
-    }
     float C1 = 0; // Xat * Qaa * Xa
 // Xa состоит из двух частей - fixed_bits, и часть определяемая по номеру блока
 // Надо восстановить вторую часть
