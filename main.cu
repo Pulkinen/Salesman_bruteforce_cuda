@@ -102,11 +102,31 @@ void evaluate_QUBO_matrix(
             }
         }
     }
+    // Уф, тут еще дофига надо написать, пока так
 };
+
+
+void make_Q_matrix(int N,
+                   int randseed,
+                   float* Q) {
+    auto city_XYs = new float[2 * N];
+
+    std::srand(randseed);
+    for (int i = 0; i < N; ++i) {
+        city_XYs[2 * i] = static_cast<float>(std::rand()) / RAND_MAX; // Normalize to [0, 1]
+        city_XYs[2 * i + 1] = static_cast<float>(std::rand()) / RAND_MAX; // Normalize to [0, 1]
+    }
+    float max_dist;
+    auto dists = new float[N * N];
+    evaluate_distances(N, city_XYs, dists,max_dist);
+    // Инициализация матрицы Q
+    evaluate_QUBO_matrix(N, dists, Q, max_dist);
+
+}
 
 __constant__ float constQ[49 * 49]; // Поскольку матрица Q одна и та же для всех ядер, положим ее в константную память
 
-__global__ void bruteforce_semifixed_X(
+__global__ void findBestXKernel(
 //       const int N,                     // Размер вектора X и матрицы Q. Не передаем, вычислим в коде
         const float* Q,              // Матрица QUBO. N**2 x N**2
         const uint64_t prefixC1,           // массив с фиксированной частью X ...
@@ -210,72 +230,78 @@ __global__ void bruteforce_semifixed_X(
 
 }
 
-int main() {
-    int N = 100000;
-    int BLOCK_SIZE = 256;
-    int *a, *b, *c; // Хост-память
-    int *d_a, *d_b, *d_c; // Девайс-память
-    int size = N * sizeof(int);
-    cudaEvent_t start, stop;
-    float milliseconds = 0;
 
-    // Выделяем память на хосте
-    a = (int *)malloc(size);
-    b = (int *)malloc(size);
-    c = (int *)malloc(size);
+// Функция для вывода прогресса
+void printProgress(uint64_t current, uint64_t total) {
+    float progress = (float)current / total * 100.0f;
+    std::cout << "Progress: " << progress << "%" << std::endl;
+}
 
-    std::cout << "Started random" << std::endl;
 
-    // Инициализируем массивы случайными числами
-    for(int i = 0; i < N; i++) {
-        a[i] = rand() % 100;
-        b[i] = rand() % 100;
+int main(int argc, char *argv[]) {
+    int randseed = 42;
+    int Cnt = 4;
+    if (argc > 1) randseed = atoi(argv[1]);
+    if (argc > 2) Cnt = atoi(argv[2]);
+
+    const int N = Cnt * Cnt;
+    const int C1 = 6;
+    const int C2 = 9;
+    const int C3 = 13;
+    const int C4 = 8;
+
+    // Выделяем память для матрицы Q на хосте
+    auto Q = new float[N * N];
+    make_Q_matrix(Cnt, randseed, Q);
+
+    // Выделяем память для матрицы Q на девайсе
+    float* d_Q;
+    cudaMalloc(&d_Q, N * N * sizeof(float));
+    cudaMemcpy(d_Q, Q, N * N * sizeof(float), cudaMemcpyHostToDevice);
+
+    // Подготовка к запуску кернела
+    uint64_t* d_bestX;
+    float* d_bestE;
+    cudaMalloc(&d_bestX, sizeof(uint64_t));
+    cudaMalloc(&d_bestE, sizeof(float));
+
+    // Инициализация лучших значений
+    uint64_t bestX = 0;
+    float bestE = FLT_MAX;
+    cudaMemcpy(d_bestE, &bestE, sizeof(float), cudaMemcpyHostToDevice);
+
+    // Цикл перебора старших бит
+    const int C1_cycles_count = 1 << C1;
+    const int gridSize = 1 << C2;
+    const int blockSize = 1 << C4; //256
+
+    for (uint64_t i = 0; i < C1_cycles_count; ++i) {
+        // Печать прогресса
+        printProgress(i, C1_cycles_count);
+
+        // Запуск кернела
+        findBestXKernel<<< gridSize, blockSize>>>(d_Q, i, C1, C2, C3, d_bestX, d_bestE);
+
+        // Синхронизация
+        cudaDeviceSynchronize();
+
+        // Обновление лучшего результата
+        float currentE;
+        cudaMemcpy(&currentE, d_bestE, sizeof(float), cudaMemcpyDeviceToHost);
+        if (currentE < bestE) {
+            bestE = currentE;
+            cudaMemcpy(&bestX, d_bestX, sizeof(uint64_t), cudaMemcpyDeviceToHost);
+        }
     }
 
-    std::cout << "Started mem copy host -> device, size = " << size << std::endl;
+    // Вывод результата
+    std::cout << "Best E: " << bestE << "\nBest X: " << bestX << std::endl;
 
-    // Выделяем память на девайсе (GPU)
-    cudaMalloc(&d_a, size);
-    cudaMalloc(&d_b, size);
-    cudaMalloc(&d_c, size);
-
-    // Копируем данные из хост-памяти в девайс-память
-    cudaMemcpy(d_a, a, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, b, size, cudaMemcpyHostToDevice);
-
-    // Создаем события для замера времени
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
-
-    std::cout << "Started vectorAdd kernel" << std::endl;
-
-    // Выполняем сложение массивов на GPU
-    int gridSize = (int)ceil((float)N / BLOCK_SIZE);
-    vectorAdd<<<gridSize, BLOCK_SIZE>>>(d_a, d_b, d_c, N);
-
-    // Останавливаем таймер
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-
-    std::cout << "Started mem copy device -> host, size = " << size << std::endl;
-    // Копируем результат обратно в хост-память
-    cudaMemcpy(c, d_c, size, cudaMemcpyDeviceToHost);
-
-    std::cout << "Total run time GPU: " << milliseconds << " milliseconds\n";
-
-    // Освобождаем ресурсы
-    cudaFree(d_a);
-    cudaFree(d_b);
-    cudaFree(d_c);
-
-    free(a);
-    free(b);
-    free(c);
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // Освобождение ресурсов
+    cudaFree(d_Q);
+    cudaFree(d_bestX);
+    cudaFree(d_bestE);
+    delete[] Q;
 
     return 0;
 }
