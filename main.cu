@@ -171,6 +171,40 @@ __global__ void bruteforce_semifixed_X(
             subVectorC3[tid] = (subVecValue >> (C3 - 1 - tid)) & 1;
         }
         __syncthreads(); // Синхронизация для обеспечения заполнения массива
+
+        int suffixC4 = threadIdx.x; // threadIdx.x - это уже бинарное представление суффикса длиной C4=8
+        unsigned int X_3_4 = 0;
+
+        for (int i = 0; i < C3; ++i) {
+            X_3_4 |= subVectorC3[i] << (C4 + i);
+        }
+        X_3_4 |= suffixC4; // Добавляем суффикс C4 к X_3_4
+
+        // Вычисляем E для каждого потока
+        float E = 0.0f;
+        int index = C1C2 + C3; // Индекс начала матрицы Q22
+        for (int i = 0; i < C3 + C4; ++i) {
+            if ((X_3_4 >> i) & 1) { // Если i-й бит X_3_4 установлен
+                for (int j = i; j < C3 + C4; ++j) {
+                    if ((X_3_4 >> j) & 1) {
+                        E += Q[(index + i) * N + index + j]; // Вычисляем элемент E
+                    }
+                }
+            }
+        }
+
+        // Шаг 4: Суммируем E с предвычисленными значениями и сохраняем в локальном массиве
+        __shared__ float localE[256]; // Предполагаем, что размер блока не больше 256
+        E += Q11Product; // Добавляем предвычисленное значение для fullPrefix
+        for (int i = 0; i < N - C1C2; ++i) { // Добавляем вклад от Q12Vector и subVectorC3
+            E += Q12Vector[C1C2 + i] * subVectorC3[i];
+        }
+        localE[threadIdx.x] = E;
+        __syncthreads(); // Синхронизируем потоки перед следующими шагами
+
+        // Тут найдем минимум в localE
+
+        __syncthreads(); // Синхронизация перед следующей итерацией цикла
     }
 
 
