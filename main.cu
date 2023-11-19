@@ -107,14 +107,15 @@ void evaluate_QUBO_matrix(
 __constant__ float constQ[49 * 49]; // Поскольку матрица Q одна и та же для всех ядер, положим ее в константную память
 
 __global__ void bruteforce_semifixed_X(
-//        int N,                     // Размер вектора X и матрицы Q. Не передаем, вычислим в коде
+//       const int N,                     // Размер вектора X и матрицы Q. Не передаем, вычислим в коде
         const float* Q,              // Матрица QUBO. N**2 x N**2
-        uint64_t prefixC1,           // массив с фиксированной частью X ...
-        int C1,                      // ... и его длина
+        const uint64_t prefixC1,           // массив с фиксированной частью X ...
+        const int C1,                      // ... и его длина
+        const int C2,                      // длина второй половины фиксированной части X
+        const int C3,
         uint64_t* bestX,             // здесь будем возвращать лучший найденный X
-        float* bestE,                // здесь будем возвращать лучшее найденное Е
-        int C2,                      // длина второй половины фиксированной части X
-        int C3)                      // число бит перебираемых в цикле
+        float* bestE                // здесь будем возвращать лучшее найденное Е
+        )                      // число бит перебираемых в цикле
 {
     int C4 = 8;
     int N = C1 + C2 + C3 + C4;
@@ -145,7 +146,7 @@ __global__ void bruteforce_semifixed_X(
         Q11Product = 0.0f;
         for (int i = 0; i < C1 + C2; ++i) {
             for (int j = i; j < C1 + C2; ++j) { // Q11 верхнетреугольная
-                Q11Product += prefixArray[i] * Q[i * 49 + j] * prefixArray[j];
+                Q11Product += prefixArray[i] * Q[i * N + j] * prefixArray[j];
             }
         }
     }
@@ -155,22 +156,21 @@ __global__ void bruteforce_semifixed_X(
     if (tid < N) { // Вектор Q12 может быть больше, чем C1+C2
         Q12Vector[tid] = 0.0f;
         for (int i = 0; i < C1 + C2; ++i) {
-            Q12Vector[tid] += prefixArray[i] * Q[i * 49 + tid];
+            Q12Vector[tid] += prefixArray[i] * Q[i * N + tid];
         }
     }
     __syncthreads(); // Синхронизация для обеспечения вычисления вектора
 
+    // Теперь у нас есть Q11Product и Q12Vector, и мы можем выполнить перебор всех подвекторов длины C3.
+    __shared__ int subVectorC3[49]; // Будет использоваться для хранения текущего подвектора C3
 
-// Цикл по левой части вектора Xb. 2**cycled_bits_cnt итераций
-    unsigned int cycles_cnt = 1;
-    for (int i = 0; i < C3-1; ++i){
-        cycles_cnt <<= 1;
-    };
-    for (int i = 0; i < cycles_cnt; ++i){
-// Так, тут проблемка. Левая часть вектора Xb должна быть общая для всех потоков блока
-// А правую - каждый поток строит сам, по своему threadIdx
-// Тут нужен еще один уровень блочного умножения
-
+    // Организуем цикл по всем возможным значениям подвектора C3
+    const uint64_t maxC3Value = (1ULL << C3) - 1; // Максимальное значение для подвектора C3
+    for (uint64_t subVecValue = 0; subVecValue <= maxC3Value; ++subVecValue) {
+        if (tid < C3) { // Каждый поток заполняет часть массива subVectorC3
+            subVectorC3[tid] = (subVecValue >> (C3 - 1 - tid)) & 1;
+        }
+        __syncthreads(); // Синхронизация для обеспечения заполнения массива
     }
 
 
