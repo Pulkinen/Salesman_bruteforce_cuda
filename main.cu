@@ -77,7 +77,7 @@ void evaluate_distances(
             float dx = Xi - Xj;
             float dy = Yi - Yj;
             float dist = sqrtf(dx*dx + dy*dy);
-            distances[threadIdx.x] = dist;
+            distances[i*N + j] = dist;
             if (dist > max_dist)
                 max_dist = dist;
         }
@@ -255,9 +255,7 @@ int main(int argc, char *argv[]) {
     make_Q_matrix(Cnt, randseed, Q);
 
     // Выделяем память для матрицы Q на девайсе
-    float* d_Q;
-    cudaMalloc(&d_Q, N * N * sizeof(float));
-    cudaMemcpy(d_Q, Q, N * N * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol(constQ, Q, N*N);
 
     // Подготовка к запуску кернела
     uint64_t* d_bestX;
@@ -280,7 +278,7 @@ int main(int argc, char *argv[]) {
         printProgress(i, C1_cycles_count);
 
         // Запуск кернела
-        findBestXKernel<<< gridSize, blockSize>>>(d_Q, i, C1, C2, C3, d_bestX, d_bestE);
+        findBestXKernel<<< gridSize, blockSize>>>(constQ, i, C1, C2, C3, d_bestX, d_bestE);
 
         // Синхронизация
         cudaDeviceSynchronize();
@@ -298,7 +296,6 @@ int main(int argc, char *argv[]) {
     std::cout << "Best E: " << bestE << "\nBest X: " << bestX << std::endl;
 
     // Освобождение ресурсов
-    cudaFree(d_Q);
     cudaFree(d_bestX);
     cudaFree(d_bestE);
     delete[] Q;
