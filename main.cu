@@ -101,58 +101,62 @@ void evaluate_QUBO_matrix(
 };
 
 __global__ void bruteforce_semifixed_X(
-        int N,                  // число городов
-        float* city_XYs,        // массив пар (X, Y) координат городов
-        int* fixed_bits,        // массив с фиксированной частью X ...
-        int fixed_bits_cnt,     // ... и его длина
-        int grid_bits_cnt,      // длина второй половины фиксированной части X
-        int cycled_bits_cnt)    // число бит перебираемых в цикле
+//        int N,                     // Размер вектора X и матрицы Q. Не передаем, вычислим в коде
+        float* Q,                    // Матрица QUBO. N**2 x N**2
+        uint64_t prefixC1,           // массив с фиксированной частью X ...
+        int C1,                      // ... и его длина
+        uint64_t* bestX,             // здесь будем возвращать лучший найденный X
+        float* bestE,                // здесь будем возвращать лучшее найденное Е
+        int C2,                      // длина второй половины фиксированной части X
+        int C3)                      // число бит перебираемых в цикле
 {
-    if ((N < 4) || (N > 7))
+    int C4 = 8;
+    int N = C1 + C2 + C3 + C4;
+
+    if ((N < 16) || (N > 49))
         return;
 
     float distances[7*7];
-    float Q[49 * 49]; // Матрица QUBO. N**2 x N**2
     float max_dist = 0;
-    float C1 = 0; // Xat * Qaa * Xa
-// Xa состоит из двух частей - fixed_bits, и часть определяемая по номеру блока
+    float QProduct = 0; // Xat * Q11 * Xa
+// Xa состоит из двух частей - C1 и С2,
 // Надо восстановить вторую часть
+    int C1C2 = C1 + C2;
+    uint64_t fullPrefix = (prefixC1 << C2) | (blockIdx.x & ((1ULL << C2) - 1));
+
     int Xa[49];
-    int Xa_len = fixed_bits_cnt + grid_bits_cnt;
-    int Xb_len = N * N - Xa_len;
-    for(int i = 0; i != fixed_bits_cnt; ++i){
-        Xa[i] = fixed_bits[i];
-    }
+
+    int Xb_len = N * N - C1C2;
     int num = blockIdx.x;
-    for(int i = 0; i != fixed_bits_cnt; ++i){
-        Xa[Xa_len - i - 1] = num & 1;
+    for(int i = 0; i != C1; ++i){
+        Xa[C1C2 - i - 1] = num & 1;
         num >>= 1;
     }
 // Найдем C1 как Xat * Qaa * Xa
     float temp[49];
     // Умножаем матрицу Q на вектор Xa
-    for (int i = 0; i < Xa_len; i++) {
+    for (int i = 0; i < C1C2; i++) {
         temp[i] = 0.0;
-        for (int j = 0; j < Xa_len; j++) {
+        for (int j = 0; j < C1C2; j++) {
             temp[i] += Q[ i*49+j ] * Xa[j];
         }
     }
-    for (int i = 0; i < Xa_len; i++) {
+    for (int i = 0; i < C1C2; i++) {
         C1 += Xa[i] * temp[i];
     }
 
 // Найдем C2 как Xat * Qab
-    float C2[49]; // Xat * Qab
+    float C222[49]; // Xat * Qab
     for (int i = 0; i < Xb_len; i++) {
-        C2[i] = 0;
-        for (int j = 0; j < Xa_len; j++) {
-            C2[i] += Xa[j] * Q[49 * j + i + Xa_len];
+        C222[i] = 0;
+        for (int j = 0; j < C1C2; j++) {
+            C222[i] += Xa[j] * Q[49 * j + i + C1C2];
         }
     }
 
 // Цикл по левой части вектора Xb. 2**cycled_bits_cnt итераций
     unsigned int cycles_cnt = 1;
-    for (int i = 0; i < cycled_bits_cnt-1; ++i){
+    for (int i = 0; i < C3-1; ++i){
         cycles_cnt <<= 1;
     };
     for (int i = 0; i < cycles_cnt; ++i){
