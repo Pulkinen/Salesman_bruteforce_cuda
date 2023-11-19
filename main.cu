@@ -145,39 +145,21 @@ __global__ void bruteforce_semifixed_X(
         Q11Product = 0.0f;
         for (int i = 0; i < C1 + C2; ++i) {
             for (int j = i; j < C1 + C2; ++j) { // Q11 верхнетреугольная
-                Q11Product += prefixArray[i] * Q[i * N + j] * prefixArray[j];
+                Q11Product += prefixArray[i] * Q[i * 49 + j] * prefixArray[j];
             }
         }
     }
     __syncthreads(); // Синхронизация для обеспечения вычисления произведения
 
-    int Xb_len = N * N - C1C2;
-    int num = blockIdx.x;
-    for(int i = 0; i != C1; ++i){
-        Xa[C1C2 - i - 1] = num & 1;
-        num >>= 1;
-    }
-// Найдем C1 как Xat * Qaa * Xa
-    float temp[49];
-    // Умножаем матрицу Q на вектор Xa
-    for (int i = 0; i < C1C2; i++) {
-        temp[i] = 0.0;
-        for (int j = 0; j < C1C2; j++) {
-            temp[i] += Q[ i*49+j ] * Xa[j];
+    // Шаг 3. Вычисляем вектор [fullPrefix]t * Q12
+    if (tid < N) { // Вектор Q12 может быть больше, чем C1+C2
+        Q12Vector[tid] = 0.0f;
+        for (int i = 0; i < C1 + C2; ++i) {
+            Q12Vector[tid] += prefixArray[i] * Q[i * 49 + tid];
         }
     }
-    for (int i = 0; i < C1C2; i++) {
-        C1 += Xa[i] * temp[i];
-    }
+    __syncthreads(); // Синхронизация для обеспечения вычисления вектора
 
-// Найдем C2 как Xat * Qab
-    float C222[49]; // Xat * Qab
-    for (int i = 0; i < Xb_len; i++) {
-        C222[i] = 0;
-        for (int j = 0; j < C1C2; j++) {
-            C222[i] += Xa[j] * Q[49 * j + i + C1C2];
-        }
-    }
 
 // Цикл по левой части вектора Xb. 2**cycled_bits_cnt итераций
     unsigned int cycles_cnt = 1;
@@ -188,8 +170,6 @@ __global__ void bruteforce_semifixed_X(
 // Так, тут проблемка. Левая часть вектора Xb должна быть общая для всех потоков блока
 // А правую - каждый поток строит сам, по своему threadIdx
 // Тут нужен еще один уровень блочного умножения
-
-
 
     }
 
