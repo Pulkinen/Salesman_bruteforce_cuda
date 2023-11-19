@@ -31,7 +31,7 @@
 // 2. Получает фиксированные fixed_size старших бит вектора X
 // 3. Считает Xt * Q * X для фиксированной части X
 //      Выполняет цикл, перебирает по все значения переменной части вектора X
-// 1. Берет младшие 8 бит переменной части (blockDim.x = 256)
+// 1. Берет младшие 8 бит переменной части (blockDim.x == 256)
 // 2. В 256 потоков досчитывает Xt * Q * X для переменной части X
 // 3. Выбирает минимум
 // 4. Обновляет ранее найденный минимум, запоминает лучший X
@@ -52,8 +52,12 @@ Xb
 \end{pmatrix} \]
 
 \[ X^T Q X = Xa^T Q{aa} Xa + Xa^T Q{ab} Xb + Xb^T Q{bb} Xb \]
-
  \[ X^T Q X = C1 + C2 Xb + Xb^T Q{bb} Xb \]
+
+Переменные в ядре будут называться по другому
+ Qaa - Q11
+ Qab - Q12
+ Qbb - Q22
 */
 
 void evaluate_distances(
@@ -100,9 +104,11 @@ void evaluate_QUBO_matrix(
     }
 };
 
+__constant__ float constQ[49 * 49]; // Поскольку матрица Q одна и та же для всех ядер, положим ее в константную память
+
 __global__ void bruteforce_semifixed_X(
 //        int N,                     // Размер вектора X и матрицы Q. Не передаем, вычислим в коде
-        float* Q,                    // Матрица QUBO. N**2 x N**2
+        const float* Q,              // Матрица QUBO. N**2 x N**2
         uint64_t prefixC1,           // массив с фиксированной частью X ...
         int C1,                      // ... и его длина
         uint64_t* bestX,             // здесь будем возвращать лучший найденный X
@@ -116,15 +122,34 @@ __global__ void bruteforce_semifixed_X(
     if ((N < 16) || (N > 49))
         return;
 
-    float distances[7*7];
-    float max_dist = 0;
     float QProduct = 0; // Xat * Q11 * Xa
 // Xa состоит из двух частей - C1 и С2,
 // Надо восстановить вторую часть
     int C1C2 = C1 + C2;
     uint64_t fullPrefix = (prefixC1 << C2) | (blockIdx.x & ((1ULL << C2) - 1));
 
-    int Xa[49];
+    __shared__ int prefixArray[49]; // Shared memory для вектора fullPrefix
+    __shared__ float Q11Product; // Здесь будет храниться [fullPrefix]t * Q11 * [fullPrefix]
+    __shared__ float Q12Vector[49]; // Здесь будет храниться [fullPrefix]t * Q12
+
+    int tid = threadIdx.x;
+
+    // Шаг 1. Развертываем fullPrefix в массив интов
+    if (tid < C1 + C2) {
+        prefixArray[tid] = (fullPrefix >> (C1 + C2 - 1 - tid)) & 1ULL;
+    }
+    __syncthreads(); // Синхронизация для обеспечения заполнения массива
+
+    // Шаг 2. Вычисляем [fullPrefix]t * Q11 * [fullPrefix]
+    if (tid == 0) { // Пусть только один поток выполнит эту задачу
+        Q11Product = 0.0f;
+        for (int i = 0; i < C1 + C2; ++i) {
+            for (int j = i; j < C1 + C2; ++j) { // Q11 верхнетреугольная
+                Q11Product += prefixArray[i] * Q[i * N + j] * prefixArray[j];
+            }
+        }
+    }
+    __syncthreads(); // Синхронизация для обеспечения вычисления произведения
 
     int Xb_len = N * N - C1C2;
     int num = blockIdx.x;
